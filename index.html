@@ -6,170 +6,70 @@
 <title>Ad Player</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  html, body {
-    width: 845px;
-    height: 314px;
-    overflow: hidden;
-    background: #000;
-  }
-
-  #player {
-    position: relative;
-    width: 845px;
-    height: 314px;
-    background: #000;
-  }
-
-  .slide {
-    position: absolute;
-    top: 0; left: 0;
-    width: 845px;
-    height: 314px;
-    opacity: 0;
-    transition: opacity 0.6s ease-in-out;
-    pointer-events: none;
-  }
-
-  .slide.active {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .slide img {
-    width: 845px;
-    height: 314px;
-    object-fit: cover;
-    display: block;
-  }
-
-  .slide video {
-    width: 845px;
-    height: 314px;
-    object-fit: cover;
-    display: block;
-    background: #000;
-  }
-
-  #error {
-    display: none;
-    color: #fff;
-    font-family: sans-serif;
-    font-size: 14px;
-    text-align: center;
-    padding-top: 140px;
-  }
+  html, body { width: 845px; height: 314px; overflow: hidden; background: #000; }
+  #player { position: relative; width: 845px; height: 314px; background: #000; }
+  .slide { position: absolute; top: 0; left: 0; width: 845px; height: 314px; }
+  .slide img { width: 845px; height: 314px; object-fit: cover; display: block; }
+  .slide video { width: 845px; height: 314px; object-fit: cover; display: block; background: #000; }
+  #error { display: none; color: #fff; font-family: sans-serif; font-size: 14px; text-align: center; padding-top: 140px; }
 </style>
 </head>
 <body>
-
 <div id="player">
   <div id="error">Could not load ads.json — check the file exists in the ads/ folder.</div>
 </div>
-
 <script>
-// ============================================================
-//  HOW TO ADD/REMOVE ADS:
-//  Edit ads/ads.json — just list the filenames.
-//  Images need a duration (seconds). Videos auto-advance.
-//
-//  Example ads.json:
-//  {
-//    "ads": [
-//      { "file": "banner.jpg", "duration": 8 },
-//      { "file": "promo.mp4" },
-//      { "file": "sale.png", "duration": 10 }
-//    ]
-//  }
-//
-//  Supported image types: jpg, jpeg, png, gif, webp
-//  Supported video types: mp4, webm
-// ============================================================
-
 const ADS_FOLDER = "ads/";
-const DEFAULT_IMAGE_DURATION = 10; // seconds, used if no duration set in ads.json
-
+const DEFAULT_IMAGE_DURATION = 10;
 const player = document.getElementById("player");
 const errorEl = document.getElementById("error");
-let slides = [];
-let current = 0;
-let timer = null;
+var adList = [];
+var current = 0;
+var timer = null;
+var currentEl = null;
 
-function isVideo(filename) {
-  return /\.(mp4|webm)$/i.test(filename);
-}
-
-function buildSlides(adList) {
-  adList.forEach((item, i) => {
-    const div = document.createElement("div");
-    div.className = "slide";
-
-    if (isVideo(item.file)) {
-      const vid = document.createElement("video");
-      vid.src = ADS_FOLDER + item.file;
-      vid.muted = true;
-      vid.playsInline = true;
-      vid.preload = "auto";
-      vid.addEventListener("ended", () => { if (i === current) advance(); });
-      vid.addEventListener("error", () => { if (i === current) advance(); });
-      div.appendChild(vid);
-    } else {
-      const img = document.createElement("img");
-      img.src = ADS_FOLDER + item.file;
-      img.draggable = false;
-      div.appendChild(img);
-    }
-
-    player.appendChild(div);
-    slides.push({ el: div, item });
-  });
-
-  showSlide(0);
-}
+function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
 
 function showSlide(index) {
-  slides.forEach(s => {
-    s.el.classList.remove("active");
-    const v = s.el.querySelector("video");
-    if (v) { v.pause(); v.currentTime = 0; }
-  });
-
   clearTimeout(timer);
-
-  const { el, item } = slides[index];
-  el.classList.add("active");
-
+  if (currentEl) {
+    var oldVid = currentEl.querySelector("video");
+    if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
+    currentEl.remove();
+    currentEl = null;
+  }
+  var item = adList[index];
+  var div = document.createElement("div");
+  div.className = "slide";
   if (isVideo(item.file)) {
-    const vid = el.querySelector("video");
-    vid.currentTime = 0;
-    vid.play().catch(() => {
-      timer = setTimeout(advance, 5000);
-    });
+    var vid = document.createElement("video");
+    vid.src = ADS_FOLDER + encodeURIComponent(item.file);
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.preload = "auto";
+    vid.addEventListener("ended", advance);
+    vid.addEventListener("error", function() { timer = setTimeout(advance, 1000); });
+    div.appendChild(vid);
+    player.appendChild(div);
+    currentEl = div;
+    vid.play().catch(function() { timer = setTimeout(advance, 5000); });
   } else {
-    const dur = (item.duration || DEFAULT_IMAGE_DURATION) * 1000;
-    timer = setTimeout(advance, dur);
+    var img = document.createElement("img");
+    img.src = ADS_FOLDER + encodeURIComponent(item.file);
+    img.draggable = false;
+    div.appendChild(img);
+    player.appendChild(div);
+    currentEl = div;
+    timer = setTimeout(advance, (item.duration || DEFAULT_IMAGE_DURATION) * 1000);
   }
 }
 
-function advance() {
-  current = (current + 1) % slides.length;
-  showSlide(current);
-}
+function advance() { current = (current + 1) % adList.length; showSlide(current); }
 
-// Load the manifest
 fetch("ads/ads.json?nocache=" + Date.now())
-  .then(r => {
-    if (!r.ok) throw new Error("ads.json not found");
-    return r.json();
-  })
-  .then(data => {
-    if (!data.ads || data.ads.length === 0) throw new Error("No ads in ads.json");
-    buildSlides(data.ads);
-  })
-  .catch(err => {
-    console.error(err);
-    errorEl.style.display = "block";
-  });
+  .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+  .then(function(data) { if (!data.ads || !data.ads.length) throw new Error("empty"); adList = data.ads; showSlide(0); })
+  .catch(function(err) { console.error(err); errorEl.style.display = "block"; });
 </script>
 </body>
 </html>
