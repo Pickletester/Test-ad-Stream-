@@ -1,0 +1,11 @@
+{
+  "ads": [
+    { "file": "lorad.png" },
+    { "file": "sardinia.png" },
+    { "file": "ad3.jpg" },
+    { "file": "ad4.jpg" },
+    { "file": "ad5.jpg", "duration": 20 },
+    { "file": "ad6.jpg" },
+    { "file": "ad7.jpg", "duration": 5 }
+  ]
+}
