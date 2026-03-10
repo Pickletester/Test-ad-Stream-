@@ -1,7 +1,6 @@
 {
   "ads": [
-    { "file": "ad1.jpg", "duration": 8 },
-    { "file": "ad2.jpg", "duration": 8 },
-    { "file": "promo.mp4" }
+    { "file": "lorad.png", "duration": 8 },
+    { "file": "sardinia.png", "duration": 8 }
   ]
 }
