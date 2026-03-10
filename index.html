@@ -27,20 +27,34 @@ var adList = [];
 var current = 0;
 var timer = null;
 var currentEl = null;
+var preloadImg = null;
 
 function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
 
+function preloadNext(index) {
+  var next = (index + 1) % adList.length;
+  var item = adList[next];
+  if (!isVideo(item.file)) {
+    preloadImg = new Image();
+    preloadImg.src = ADS_FOLDER + encodeURIComponent(item.file);
+  }
+}
+
 function showSlide(index) {
   clearTimeout(timer);
+
+  // Destroy previous element to free memory
   if (currentEl) {
     var oldVid = currentEl.querySelector("video");
     if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
     currentEl.remove();
     currentEl = null;
   }
+
   var item = adList[index];
   var div = document.createElement("div");
   div.className = "slide";
+
   if (isVideo(item.file)) {
     var vid = document.createElement("video");
     vid.src = ADS_FOLDER + encodeURIComponent(item.file);
@@ -53,14 +67,30 @@ function showSlide(index) {
     player.appendChild(div);
     currentEl = div;
     vid.play().catch(function() { timer = setTimeout(advance, 5000); });
+    preloadNext(index);
   } else {
     var img = document.createElement("img");
-    img.src = ADS_FOLDER + encodeURIComponent(item.file);
-    img.draggable = false;
-    div.appendChild(img);
-    player.appendChild(div);
-    currentEl = div;
-    timer = setTimeout(advance, (item.duration || DEFAULT_IMAGE_DURATION) * 1000);
+    var src = ADS_FOLDER + encodeURIComponent(item.file);
+
+    // If already preloaded, show instantly — otherwise wait for load
+    if (preloadImg && preloadImg.src.indexOf(encodeURIComponent(item.file)) !== -1 && preloadImg.complete) {
+      img.src = src;
+      div.appendChild(img);
+      player.appendChild(div);
+      currentEl = div;
+      preloadNext(index);
+      timer = setTimeout(advance, (item.duration || DEFAULT_IMAGE_DURATION) * 1000);
+    } else {
+      img.src = src;
+      img.onload = function() {
+        div.appendChild(img);
+        player.appendChild(div);
+        currentEl = div;
+        preloadNext(index);
+        timer = setTimeout(advance, (item.duration || DEFAULT_IMAGE_DURATION) * 1000);
+      };
+      img.onerror = function() { advance(); };
+    }
   }
 }
 
