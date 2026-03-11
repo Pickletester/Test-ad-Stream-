@@ -139,8 +139,12 @@ fetch("ads/ads.json?nocache=" + Date.now())
     if (!data.ads || !data.ads.length) throw new Error("empty");
     adList = data.ads;
     buildOffsets();
-    var idx = getCurrentIndex();
-    showSlide(idx);
+    // Wait until the next clean second boundary so first load lands in sync
+    var msUntilNextSecond = 1000 - (Date.now() % 1000);
+    setTimeout(function() {
+      var idx = getCurrentIndex();
+      showSlide(idx);
+    }, msUntilNextSecond);
   })
   .catch(function(err) { console.error(err); errorEl.style.display = "block"; });
 </script>
