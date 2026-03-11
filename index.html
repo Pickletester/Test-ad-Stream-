@@ -21,12 +21,13 @@
 </head>
 <body>
 <div id="player">
-  <div id="error">Could not load ads.json — check the file exists in the ads/ folder.</div>
+  <div id="error">Could not load ads.json</div>
 </div>
 <script>
 const ADS_FOLDER = "ads/";
 const DEFAULT_IMAGE_DURATION = 10;
-const LOAD_TIMEOUT_MS = 4000; // max wait for an image before skipping
+const LOAD_TIMEOUT_MS = 8000;   // more forgiving on slow 4G
+const PRELOAD_AHEAD = 2;        // preload next 2 images in background
 
 const player = document.getElementById("player");
 const errorEl = document.getElementById("error");
@@ -37,6 +38,9 @@ var advanceTimer = null;
 var loadTimer = null;
 var cycleLength = 0;
 var offsets = [];
+
+// Cache: keep Image objects alive so browser doesn't evict them
+var imageCache = {};
 
 function buildOffsets() {
   cycleLength = 0;
@@ -68,93 +72,132 @@ function clearTimers() {
   if (loadTimer)    { clearTimeout(loadTimer);    loadTimer = null; }
 }
 
+// Preload upcoming images into cache so they're ready when needed
+function preloadUpcoming(currentIndex) {
+  for (var i = 1; i <= PRELOAD_AHEAD; i++) {
+    var nextIdx = (currentIndex + i) % adList.length;
+    var file = adList[nextIdx].file;
+    if (!imageCache[file]) {
+      var img = new Image();
+      img.src = ADS_FOLDER + encodeURIComponent(file);
+      imageCache[file] = img;
+    }
+  }
+}
+
+function getOrLoadImage(file, onLoad, onError) {
+  var src = ADS_FOLDER + encodeURIComponent(file);
+
+  // Already cached and loaded — use instantly, no network hit
+  if (imageCache[file] && imageCache[file].complete && imageCache[file].naturalWidth > 0) {
+    onLoad(imageCache[file]);
+    return;
+  }
+
+  var img = imageCache[file] || new Image();
+  imageCache[file] = img;
+
+  img.onload = function() { onLoad(img); };
+  img.onerror = function() { delete imageCache[file]; onError(); };
+
+  if (!img.src) img.src = src;
+}
+
 function showSlide(index) {
   clearTimers();
 
   var item = adList[index];
-  var src  = ADS_FOLDER + encodeURIComponent(item.file);
 
-  var div = document.createElement("div");
-  div.className = "slide";
-
-  var img = document.createElement("img");
-  img.src = src;
-
-  // Failsafe: if image doesn't load within LOAD_TIMEOUT_MS, skip to next
   loadTimer = setTimeout(function() {
-    console.warn("Load timeout for:", item.file);
-    div.remove();
+    console.warn("Timeout loading:", item.file);
+    delete imageCache[item.file];
     checkAndAdvance();
   }, LOAD_TIMEOUT_MS);
 
-  img.onload = function() {
-    clearTimeout(loadTimer);
-    loadTimer = null;
+  getOrLoadImage(item.file,
+    function(img) {
+      clearTimeout(loadTimer);
+      loadTimer = null;
 
-    div.appendChild(img);
-    player.appendChild(div);
+      var div = document.createElement("div");
+      div.className = "slide";
 
-    // Fade in new slide
-    requestAnimationFrame(function() {
+      var imgEl = document.createElement("img");
+      imgEl.src = img.src;
+      div.appendChild(imgEl);
+      player.appendChild(div);
+
       requestAnimationFrame(function() {
-        div.classList.add("visible");
+        requestAnimationFrame(function() {
+          div.classList.add("visible");
+        });
       });
-    });
 
-    // Fade out and remove OLD slide after new one is visible
-    if (currentEl) {
-      var old = currentEl;
-      setTimeout(function() {
-        old.classList.remove("visible");
-        setTimeout(function() { old.remove(); }, 350);
-      }, 50);
+      // Keep old slide visible until new one fades in — no black gap
+      if (currentEl) {
+        var old = currentEl;
+        setTimeout(function() {
+          old.classList.remove("visible");
+          setTimeout(function() { old.remove(); }, 350);
+        }, 50);
+      }
+
+      currentEl = div;
+      preloadUpcoming(index);
+
+      var msLeft = getMsRemaining(index);
+      advanceTimer = setTimeout(checkAndAdvance, msLeft);
+    },
+    function() {
+      clearTimeout(loadTimer);
+      loadTimer = null;
+      console.warn("Error loading:", item.file);
+      advanceTimer = setTimeout(checkAndAdvance, 500);
     }
-
-    currentEl = div;
-
-    // Schedule next ad
-    var msLeft = getMsRemaining(index);
-    advanceTimer = setTimeout(checkAndAdvance, msLeft);
-  };
-
-  img.onerror = function() {
-    clearTimeout(loadTimer);
-    loadTimer = null;
-    console.warn("Error loading:", item.file);
-    div.remove();
-    // Skip this ad and wait a moment before trying next
-    advanceTimer = setTimeout(checkAndAdvance, 500);
-  };
+  );
 }
 
 function checkAndAdvance() {
   clearTimers();
-  var idx = getCurrentIndex();
-  showSlide(idx);
+  showSlide(getCurrentIndex());
 }
 
-// Reload ads.json periodically so new ads appear without restarting
-function loadAds() {
-  fetch("ads/ads.json?nocache=" + Date.now())
-    .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
-    .then(function(data) {
-      if (!data.ads || !data.ads.length) throw new Error("empty");
-      adList = data.ads;
-      buildOffsets();
+fetch("ads/ads.json?nocache=" + Date.now())
+  .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+  .then(function(data) {
+    if (!data.ads || !data.ads.length) throw new Error("empty");
+    adList = data.ads;
+    buildOffsets();
 
-      // Sync to next clean second boundary
+    // Front-load ALL images over 4G during startup so playback stays smooth
+    var started = false;
+
+    function tryStart() {
+      if (started) return;
+      started = true;
       var msUntilNextSecond = 1000 - (Date.now() % 1000);
-      setTimeout(function() {
-        checkAndAdvance();
-      }, msUntilNextSecond);
-    })
-    .catch(function(err) {
-      console.error(err);
-      errorEl.style.display = "block";
-    });
-}
+      setTimeout(checkAndAdvance, msUntilNextSecond);
+    }
 
-loadAds();
+    var loaded = 0;
+    adList.forEach(function(ad, i) {
+      var img = new Image();
+      img.onload = img.onerror = function() {
+        loaded++;
+        // Start as soon as the first ad's image is ready
+        if (i === getCurrentIndex() || loaded === adList.length) tryStart();
+      };
+      img.src = ADS_FOLDER + encodeURIComponent(ad.file);
+      imageCache[ad.file] = img;
+    });
+
+    // Hard fallback: start after 3s no matter what
+    setTimeout(tryStart, 3000);
+  })
+  .catch(function(err) {
+    console.error(err);
+    errorEl.style.display = "block";
+  });
 </script>
 </body>
 </html>
