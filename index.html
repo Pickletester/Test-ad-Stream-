@@ -96,12 +96,7 @@ function showSlide(index) {
     vid.playsInline = true;
     vid.preload = "auto";
 
-    // Seek into the video to match where we are in the cycle
-    var now = Math.floor(Date.now() / 1000);
-    var pos = now % cycleLength;
-    var elapsed = pos - offsets[index];
-    vid.addEventListener("loadedmetadata", function() {
-      if (elapsed > 0 && elapsed < vid.duration) vid.currentTime = elapsed;
+    vid.addEventListener("canplay", function() {
       vid.play().catch(function() {});
     });
     vid.addEventListener("ended", checkAndAdvance);
