@@ -10,7 +10,6 @@
   #player { position: relative; width: 845px; height: 314px; background: #000; }
   .slide { position: absolute; top: 0; left: 0; width: 845px; height: 314px; }
   .slide img { width: 845px; height: 314px; object-fit: cover; display: block; }
-  .slide video { width: 845px; height: 314px; object-fit: cover; display: block; background: #000; }
   #error { display: none; color: #fff; font-family: sans-serif; font-size: 14px; text-align: center; padding-top: 140px; }
 </style>
 </head>
@@ -29,17 +28,12 @@ var preloadImg = null;
 var cycleLength = 0; // total seconds for one full loop of all ads
 var offsets = [];    // start time (in seconds) of each ad within the cycle
 
-function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
-
 function buildOffsets() {
   cycleLength = 0;
   offsets = [];
   for (var i = 0; i < adList.length; i++) {
     offsets.push(cycleLength);
-    // Videos get a fixed slot — use duration field or default 30s for video
-    var dur = isVideo(adList[i].file)
-      ? (adList[i].duration || 30)
-      : (adList[i].duration || DEFAULT_IMAGE_DURATION);
+    var dur = adList[i].duration || DEFAULT_IMAGE_DURATION;
     cycleLength += dur;
   }
 }
@@ -59,9 +53,7 @@ function getCurrentIndex() {
 function getMsRemaining(index) {
   var now = Math.floor(Date.now() / 1000);
   var pos = now % cycleLength;
-  var dur = isVideo(adList[index].file)
-    ? (adList[index].duration || 30)
-    : (adList[index].duration || DEFAULT_IMAGE_DURATION);
+  var dur = adList[index].duration || DEFAULT_IMAGE_DURATION;
   var elapsed = pos - offsets[index];
   return Math.max((dur - elapsed) * 1000, 500);
 }
@@ -69,17 +61,13 @@ function getMsRemaining(index) {
 function preloadNext(index) {
   var next = (index + 1) % adList.length;
   var item = adList[next];
-  if (!isVideo(item.file)) {
-    preloadImg = new Image();
-    preloadImg.src = ADS_FOLDER + encodeURIComponent(item.file);
-  }
+  preloadImg = new Image();
+  preloadImg.src = ADS_FOLDER + encodeURIComponent(item.file);
 }
 
 function showSlide(index) {
   // Destroy previous
   if (currentEl) {
-    var oldVid = currentEl.querySelector("video");
-    if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
     currentEl.remove();
     currentEl = null;
   }
@@ -87,39 +75,18 @@ function showSlide(index) {
   var item = adList[index];
   var div = document.createElement("div");
   div.className = "slide";
-  var msLeft = getMsRemaining(index);
 
-  if (isVideo(item.file)) {
-    var vid = document.createElement("video");
-    vid.src = ADS_FOLDER + encodeURIComponent(item.file);
-    vid.muted = true;
-    vid.playsInline = true;
-    vid.preload = "auto";
-
-    vid.addEventListener("canplay", function() {
-      vid.play().catch(function() {});
-    });
-    vid.addEventListener("ended", checkAndAdvance);
-    vid.addEventListener("error", checkAndAdvance);
-    div.appendChild(vid);
+  var img = document.createElement("img");
+  var src = ADS_FOLDER + encodeURIComponent(item.file);
+  img.src = src;
+  img.onload = function() {
+    div.appendChild(img);
     player.appendChild(div);
     currentEl = div;
     preloadNext(index);
-    // Fallback timer in case video ends before clock says to switch
-    setTimeout(checkAndAdvance, msLeft + 500);
-  } else {
-    var img = document.createElement("img");
-    var src = ADS_FOLDER + encodeURIComponent(item.file);
-    img.src = src;
-    img.onload = function() {
-      div.appendChild(img);
-      player.appendChild(div);
-      currentEl = div;
-      preloadNext(index);
-      setTimeout(checkAndAdvance, getMsRemaining(index));
-    };
-    img.onerror = function() { checkAndAdvance(); };
-  }
+    setTimeout(checkAndAdvance, getMsRemaining(index));
+  };
+  img.onerror = function() { checkAndAdvance(); };
 }
 
 // Always re-check the clock before advancing — keeps everything honest
