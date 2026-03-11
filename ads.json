@@ -1,11 +1,22 @@
 {
   "ads": [
-    { "file": "lorad.png" },
-    { "file": "sardinia.png" },
-    { "file": "ad3.jpg" },
-    { "file": "ad4.jpg" },
-    { "file": "ad5.jpg", "duration": 20 },
-    { "file": "ad6.jpg" },
-    { "file": "ad7.jpg", "duration": 5 }
+    { "file": "ad1.jpg" },
+    { "file": "Applebox.jpg" },
+    { "file": "Baseline.mp4", "duration": 23 },
+    { "file": "Comcast.jpg" },
+    { "file": "dj.jpg" },
+    { "file": "HowardHannah.jpg" },
+    { "file": "Itaily1.jpg" },
+    { "file": "J.jpg" },
+    { "file": "LDEK.jpg" },
+    { "file": "LevelUp.jpg" },
+    { "file": "LORad-15.png", "duration": 15 },
+    { "file": "Lorenzi-15.jpg", "duration": 15 },
+    { "file": "Mission.jpg" },
+    { "file": "newadd.jpg" },
+    { "file": "Pickleballlifeline.jpg" },
+    { "file": "pisciottano.jpg" },
+    { "file": "Podiatry.jpg" },
+    { "file": "SunChevy.jpg" }
   ]
 }
