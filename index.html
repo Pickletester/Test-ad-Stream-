@@ -8,7 +8,13 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 845px; height: 314px; overflow: hidden; background: #000; }
   #player { position: relative; width: 845px; height: 314px; background: #000; }
-  .slide { position: absolute; top: 0; left: 0; width: 845px; height: 314px; }
+  .slide {
+    position: absolute; top: 0; left: 0;
+    width: 845px; height: 314px;
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+  }
+  .slide.visible { opacity: 1; }
   .slide img { width: 845px; height: 314px; object-fit: cover; display: block; }
   #error { display: none; color: #fff; font-family: sans-serif; font-size: 14px; text-align: center; padding-top: 140px; }
 </style>
@@ -20,28 +26,29 @@
 <script>
 const ADS_FOLDER = "ads/";
 const DEFAULT_IMAGE_DURATION = 10;
+const LOAD_TIMEOUT_MS = 4000; // max wait for an image before skipping
+
 const player = document.getElementById("player");
 const errorEl = document.getElementById("error");
+
 var adList = [];
 var currentEl = null;
-var preloadImg = null;
-var cycleLength = 0; // total seconds for one full loop of all ads
-var offsets = [];    // start time (in seconds) of each ad within the cycle
+var advanceTimer = null;
+var loadTimer = null;
+var cycleLength = 0;
+var offsets = [];
 
 function buildOffsets() {
   cycleLength = 0;
   offsets = [];
   for (var i = 0; i < adList.length; i++) {
     offsets.push(cycleLength);
-    var dur = adList[i].duration || DEFAULT_IMAGE_DURATION;
-    cycleLength += dur;
+    cycleLength += (adList[i].duration || DEFAULT_IMAGE_DURATION);
   }
 }
 
-// Returns which ad index should be showing RIGHT NOW based on the clock
 function getCurrentIndex() {
-  var now = Math.floor(Date.now() / 1000); // unix seconds
-  var pos = now % cycleLength;             // position within the cycle
+  var pos = Math.floor(Date.now() / 1000) % cycleLength;
   var idx = 0;
   for (var i = offsets.length - 1; i >= 0; i--) {
     if (pos >= offsets[i]) { idx = i; break; }
@@ -49,66 +56,105 @@ function getCurrentIndex() {
   return idx;
 }
 
-// Returns how many milliseconds are LEFT for the current ad
 function getMsRemaining(index) {
-  var now = Math.floor(Date.now() / 1000);
-  var pos = now % cycleLength;
+  var pos = Math.floor(Date.now() / 1000) % cycleLength;
   var dur = adList[index].duration || DEFAULT_IMAGE_DURATION;
   var elapsed = pos - offsets[index];
   return Math.max((dur - elapsed) * 1000, 500);
 }
 
-function preloadNext(index) {
-  var next = (index + 1) % adList.length;
-  var item = adList[next];
-  preloadImg = new Image();
-  preloadImg.src = ADS_FOLDER + encodeURIComponent(item.file);
+function clearTimers() {
+  if (advanceTimer) { clearTimeout(advanceTimer); advanceTimer = null; }
+  if (loadTimer)    { clearTimeout(loadTimer);    loadTimer = null; }
 }
 
 function showSlide(index) {
-  // Destroy previous
-  if (currentEl) {
-    currentEl.remove();
-    currentEl = null;
-  }
+  clearTimers();
 
   var item = adList[index];
+  var src  = ADS_FOLDER + encodeURIComponent(item.file);
+
   var div = document.createElement("div");
   div.className = "slide";
 
   var img = document.createElement("img");
-  var src = ADS_FOLDER + encodeURIComponent(item.file);
   img.src = src;
+
+  // Failsafe: if image doesn't load within LOAD_TIMEOUT_MS, skip to next
+  loadTimer = setTimeout(function() {
+    console.warn("Load timeout for:", item.file);
+    div.remove();
+    checkAndAdvance();
+  }, LOAD_TIMEOUT_MS);
+
   img.onload = function() {
+    clearTimeout(loadTimer);
+    loadTimer = null;
+
     div.appendChild(img);
     player.appendChild(div);
+
+    // Fade in new slide
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        div.classList.add("visible");
+      });
+    });
+
+    // Fade out and remove OLD slide after new one is visible
+    if (currentEl) {
+      var old = currentEl;
+      setTimeout(function() {
+        old.classList.remove("visible");
+        setTimeout(function() { old.remove(); }, 350);
+      }, 50);
+    }
+
     currentEl = div;
-    preloadNext(index);
-    setTimeout(checkAndAdvance, getMsRemaining(index));
+
+    // Schedule next ad
+    var msLeft = getMsRemaining(index);
+    advanceTimer = setTimeout(checkAndAdvance, msLeft);
   };
-  img.onerror = function() { checkAndAdvance(); };
+
+  img.onerror = function() {
+    clearTimeout(loadTimer);
+    loadTimer = null;
+    console.warn("Error loading:", item.file);
+    div.remove();
+    // Skip this ad and wait a moment before trying next
+    advanceTimer = setTimeout(checkAndAdvance, 500);
+  };
 }
 
-// Always re-check the clock before advancing — keeps everything honest
 function checkAndAdvance() {
+  clearTimers();
   var idx = getCurrentIndex();
   showSlide(idx);
 }
 
-fetch("ads/ads.json?nocache=" + Date.now())
-  .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
-  .then(function(data) {
-    if (!data.ads || !data.ads.length) throw new Error("empty");
-    adList = data.ads;
-    buildOffsets();
-    // Wait until the next clean second boundary so first load lands in sync
-    var msUntilNextSecond = 1000 - (Date.now() % 1000);
-    setTimeout(function() {
-      var idx = getCurrentIndex();
-      showSlide(idx);
-    }, msUntilNextSecond);
-  })
-  .catch(function(err) { console.error(err); errorEl.style.display = "block"; });
+// Reload ads.json periodically so new ads appear without restarting
+function loadAds() {
+  fetch("ads/ads.json?nocache=" + Date.now())
+    .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+    .then(function(data) {
+      if (!data.ads || !data.ads.length) throw new Error("empty");
+      adList = data.ads;
+      buildOffsets();
+
+      // Sync to next clean second boundary
+      var msUntilNextSecond = 1000 - (Date.now() % 1000);
+      setTimeout(function() {
+        checkAndAdvance();
+      }, msUntilNextSecond);
+    })
+    .catch(function(err) {
+      console.error(err);
+      errorEl.style.display = "block";
+    });
+}
+
+loadAds();
 </script>
 </body>
 </html>
