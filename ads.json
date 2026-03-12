@@ -14,7 +14,10 @@
     { "file": "Mission.jpg" },
     { "file": "newadd.jpg" },
     { "file": "Pickleballlifeline.jpg" },
-    { "file": "pisciottano.jpg" },
+    {
+      "rotate": true,
+      "files": ["pisciottano.jpg", "pisciottanoad2.jpg", "pisciottanoad3.jpg", "pisciottanoad4.jpg"]
+    },
     { "file": "Podiatry.jpg" },
     { "file": "SantelAd.jpg" },
     { "file": "SunChevy.jpg" }
