@@ -2,7 +2,6 @@
   "ads": [
     { "file": "ad1.jpg" },
     { "file": "Applebox.jpg" },
-    { "file": "Baseline.mp4", "duration": 23 },
     { "file": "Comcast.jpg" },
     { "file": "dj.jpg" },
     { "file": "HowardHannah.jpg" },
