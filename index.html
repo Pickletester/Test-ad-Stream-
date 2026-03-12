@@ -16,6 +16,7 @@
   }
   .slide.visible { opacity: 1; }
   .slide img { width: 845px; height: 314px; object-fit: cover; display: block; }
+  .slide video { width: 845px; height: 314px; object-fit: cover; display: block; background: #000; }
   #error { display: none; color: #fff; font-family: sans-serif; font-size: 14px; text-align: center; padding-top: 140px; }
 </style>
 </head>
@@ -24,13 +25,13 @@
   <div id="error">Could not load ads.json</div>
 </div>
 <script>
-const ADS_FOLDER = "ads/";
-const DEFAULT_IMAGE_DURATION = 10;
-const LOAD_TIMEOUT_MS = 8000;   // more forgiving on slow 4G
-const PRELOAD_AHEAD = 2;        // preload next 2 images in background
+var ADS_FOLDER = "ads/";
+var DEFAULT_IMAGE_DURATION = 10;
+var LOAD_TIMEOUT_MS = 8000;
+var PRELOAD_AHEAD = 2;
 
-const player = document.getElementById("player");
-const errorEl = document.getElementById("error");
+var player = document.getElementById("player");
+var errorEl = document.getElementById("error");
 
 var adList = [];
 var currentEl = null;
@@ -38,16 +39,38 @@ var advanceTimer = null;
 var loadTimer = null;
 var cycleLength = 0;
 var offsets = [];
-
-// Cache: keep Image objects alive so browser doesn't evict them
 var imageCache = {};
+
+function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
+
+// Get duration for a slot (rotate or normal)
+function getSlotDuration(item) {
+  if (item.rotate) return item.duration || DEFAULT_IMAGE_DURATION;
+  return isVideo(item.file)
+    ? (item.duration || 30)
+    : (item.duration || DEFAULT_IMAGE_DURATION);
+}
+
+// For rotate slots: pick which file based on how many full cycles have passed
+// Same math on every board = always in sync
+function getRotateFile(item) {
+  var now = Math.floor(Date.now() / 1000);
+  var totalCycles = Math.floor(now / cycleLength);
+  var pick = totalCycles % item.files.length;
+  return item.files[pick];
+}
+
+// Resolve the actual filename for any slot
+function resolveFile(item) {
+  return item.rotate ? getRotateFile(item) : item.file;
+}
 
 function buildOffsets() {
   cycleLength = 0;
   offsets = [];
   for (var i = 0; i < adList.length; i++) {
     offsets.push(cycleLength);
-    cycleLength += (adList[i].duration || DEFAULT_IMAGE_DURATION);
+    cycleLength += getSlotDuration(adList[i]);
   }
 }
 
@@ -62,7 +85,7 @@ function getCurrentIndex() {
 
 function getMsRemaining(index) {
   var pos = Math.floor(Date.now() / 1000) % cycleLength;
-  var dur = adList[index].duration || DEFAULT_IMAGE_DURATION;
+  var dur = getSlotDuration(adList[index]);
   var elapsed = pos - offsets[index];
   return Math.max((dur - elapsed) * 1000, 500);
 }
@@ -72,12 +95,11 @@ function clearTimers() {
   if (loadTimer)    { clearTimeout(loadTimer);    loadTimer = null; }
 }
 
-// Preload upcoming images into cache so they're ready when needed
 function preloadUpcoming(currentIndex) {
   for (var i = 1; i <= PRELOAD_AHEAD; i++) {
     var nextIdx = (currentIndex + i) % adList.length;
-    var file = adList[nextIdx].file;
-    if (!imageCache[file]) {
+    var file = resolveFile(adList[nextIdx]);
+    if (!imageCache[file] && !isVideo(file)) {
       var img = new Image();
       img.src = ADS_FOLDER + encodeURIComponent(file);
       imageCache[file] = img;
@@ -87,19 +109,14 @@ function preloadUpcoming(currentIndex) {
 
 function getOrLoadImage(file, onLoad, onError) {
   var src = ADS_FOLDER + encodeURIComponent(file);
-
-  // Already cached and loaded — use instantly, no network hit
   if (imageCache[file] && imageCache[file].complete && imageCache[file].naturalWidth > 0) {
     onLoad(imageCache[file]);
     return;
   }
-
   var img = imageCache[file] || new Image();
   imageCache[file] = img;
-
   img.onload = function() { onLoad(img); };
   img.onerror = function() { delete imageCache[file]; onError(); };
-
   if (!img.src) img.src = src;
 }
 
@@ -107,54 +124,82 @@ function showSlide(index) {
   clearTimers();
 
   var item = adList[index];
+  var file = resolveFile(item);
+  var dur = getSlotDuration(item);
 
-  loadTimer = setTimeout(function() {
-    console.warn("Timeout loading:", item.file);
-    delete imageCache[item.file];
-    checkAndAdvance();
-  }, LOAD_TIMEOUT_MS);
-
-  getOrLoadImage(item.file,
-    function(img) {
-      clearTimeout(loadTimer);
-      loadTimer = null;
-
-      var div = document.createElement("div");
-      div.className = "slide";
-
-      var imgEl = document.createElement("img");
-      imgEl.src = img.src;
-      div.appendChild(imgEl);
-      player.appendChild(div);
-
-      requestAnimationFrame(function() {
-        requestAnimationFrame(function() {
-          div.classList.add("visible");
-        });
-      });
-
-      // Keep old slide visible until new one fades in — no black gap
-      if (currentEl) {
-        var old = currentEl;
-        setTimeout(function() {
-          old.classList.remove("visible");
-          setTimeout(function() { old.remove(); }, 350);
-        }, 50);
-      }
-
-      currentEl = div;
-      preloadUpcoming(index);
-
-      var msLeft = getMsRemaining(index);
-      advanceTimer = setTimeout(checkAndAdvance, msLeft);
-    },
-    function() {
-      clearTimeout(loadTimer);
-      loadTimer = null;
-      console.warn("Error loading:", item.file);
-      advanceTimer = setTimeout(checkAndAdvance, 500);
+  if (isVideo(file)) {
+    // Destroy old
+    if (currentEl) {
+      var oldVid = currentEl.querySelector("video");
+      if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
+      currentEl.remove();
+      currentEl = null;
     }
-  );
+
+    var div = document.createElement("div");
+    div.className = "slide";
+    var vid = document.createElement("video");
+    vid.src = ADS_FOLDER + encodeURIComponent(file);
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.preload = "auto";
+    vid.addEventListener("canplay", function() {
+      div.classList.add("visible");
+      vid.play().catch(function() {});
+    });
+    vid.addEventListener("ended", checkAndAdvance);
+    vid.addEventListener("error", checkAndAdvance);
+    div.appendChild(vid);
+    player.appendChild(div);
+    currentEl = div;
+    preloadUpcoming(index);
+    advanceTimer = setTimeout(checkAndAdvance, getMsRemaining(index) + 500);
+
+  } else {
+    loadTimer = setTimeout(function() {
+      console.warn("Timeout loading:", file);
+      delete imageCache[file];
+      checkAndAdvance();
+    }, LOAD_TIMEOUT_MS);
+
+    getOrLoadImage(file,
+      function(img) {
+        clearTimeout(loadTimer);
+        loadTimer = null;
+
+        var div = document.createElement("div");
+        div.className = "slide";
+        var imgEl = document.createElement("img");
+        imgEl.src = img.src;
+        div.appendChild(imgEl);
+        player.appendChild(div);
+
+        requestAnimationFrame(function() {
+          requestAnimationFrame(function() {
+            div.classList.add("visible");
+          });
+        });
+
+        if (currentEl) {
+          var old = currentEl;
+          setTimeout(function() {
+            old.classList.remove("visible");
+            setTimeout(function() { old.remove(); }, 350);
+          }, 50);
+        }
+
+        currentEl = div;
+        preloadUpcoming(index);
+        advanceTimer = setTimeout(checkAndAdvance, getMsRemaining(index));
+      },
+      function() {
+        clearTimeout(loadTimer);
+        loadTimer = null;
+        console.warn("Error loading:", file);
+        advanceTimer = setTimeout(checkAndAdvance, 500);
+      }
+    );
+  }
 }
 
 function checkAndAdvance() {
@@ -169,9 +214,7 @@ fetch("ads/ads.json?nocache=" + Date.now())
     adList = data.ads;
     buildOffsets();
 
-    // Front-load ALL images over 4G during startup so playback stays smooth
     var started = false;
-
     function tryStart() {
       if (started) return;
       started = true;
@@ -181,17 +224,17 @@ fetch("ads/ads.json?nocache=" + Date.now())
 
     var loaded = 0;
     adList.forEach(function(ad, i) {
+      var file = resolveFile(ad);
+      if (isVideo(file)) { loaded++; if (loaded === adList.length) tryStart(); return; }
       var img = new Image();
       img.onload = img.onerror = function() {
         loaded++;
-        // Start as soon as the first ad's image is ready
         if (i === getCurrentIndex() || loaded === adList.length) tryStart();
       };
-      img.src = ADS_FOLDER + encodeURIComponent(ad.file);
-      imageCache[ad.file] = img;
+      img.src = ADS_FOLDER + encodeURIComponent(file);
+      imageCache[file] = img;
     });
 
-    // Hard fallback: start after 3s no matter what
     setTimeout(tryStart, 3000);
   })
   .catch(function(err) {
