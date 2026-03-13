@@ -29,6 +29,8 @@ var ADS_FOLDER = "ads/";
 var DEFAULT_IMAGE_DURATION = 10;
 var LOAD_TIMEOUT_MS = 8000;
 var PRELOAD_AHEAD = 2;
+var WATCHDOG_INTERVAL = 15000;  // check every 15 seconds
+var WATCHDOG_MAX_STUCK = 30000; // if no advance in 30s, recover
 
 var player = document.getElementById("player");
 var errorEl = document.getElementById("error");
@@ -41,9 +43,12 @@ var cycleLength = 0;
 var offsets = [];
 var imageCache = {};
 
+// Watchdog tracking
+var lastAdvanceTime = Date.now();
+var watchdogTimer = null;
+
 function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
 
-// Get duration for a slot (rotate or normal)
 function getSlotDuration(item) {
   if (item.rotate) return item.duration || DEFAULT_IMAGE_DURATION;
   return isVideo(item.file)
@@ -51,8 +56,6 @@ function getSlotDuration(item) {
     : (item.duration || DEFAULT_IMAGE_DURATION);
 }
 
-// For rotate slots: pick which file based on how many full cycles have passed
-// Same math on every board = always in sync
 function getRotateFile(item) {
   var now = Math.floor(Date.now() / 1000);
   var totalCycles = Math.floor(now / cycleLength);
@@ -60,7 +63,6 @@ function getRotateFile(item) {
   return item.files[pick];
 }
 
-// Resolve the actual filename for any slot
 function resolveFile(item) {
   return item.rotate ? getRotateFile(item) : item.file;
 }
@@ -95,6 +97,30 @@ function clearTimers() {
   if (loadTimer)    { clearTimeout(loadTimer);    loadTimer = null; }
 }
 
+// Watchdog: if screen hasn't advanced in WATCHDOG_MAX_STUCK ms, force recovery
+function startWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(function() {
+    var now = Date.now();
+    var timeSinceLastAdvance = now - lastAdvanceTime;
+    var expectedMax = (getSlotDuration(adList[getCurrentIndex()]) * 1000) + WATCHDOG_MAX_STUCK;
+    if (timeSinceLastAdvance > expectedMax) {
+      console.warn("Watchdog: screen stuck, forcing recovery");
+      // Clear everything and restart
+      imageCache = {};
+      clearTimers();
+      if (currentEl) {
+        var oldVid = currentEl.querySelector("video");
+        if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
+        currentEl.remove();
+        currentEl = null;
+      }
+      lastAdvanceTime = Date.now();
+      checkAndAdvance();
+    }
+  }, WATCHDOG_INTERVAL);
+}
+
 function preloadUpcoming(currentIndex) {
   for (var i = 1; i <= PRELOAD_AHEAD; i++) {
     var nextIdx = (currentIndex + i) % adList.length;
@@ -122,13 +148,12 @@ function getOrLoadImage(file, onLoad, onError) {
 
 function showSlide(index) {
   clearTimers();
+  lastAdvanceTime = Date.now(); // update watchdog timestamp
 
   var item = adList[index];
   var file = resolveFile(item);
-  var dur = getSlotDuration(item);
 
   if (isVideo(file)) {
-    // Destroy old
     if (currentEl) {
       var oldVid = currentEl.querySelector("video");
       if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
@@ -149,6 +174,12 @@ function showSlide(index) {
     });
     vid.addEventListener("ended", checkAndAdvance);
     vid.addEventListener("error", checkAndAdvance);
+    // Video failsafe
+    loadTimer = setTimeout(function() {
+      console.warn("Video timeout:", file);
+      checkAndAdvance();
+    }, LOAD_TIMEOUT_MS);
+    vid.addEventListener("canplay", function() { clearTimeout(loadTimer); });
     div.appendChild(vid);
     player.appendChild(div);
     currentEl = div;
@@ -219,7 +250,10 @@ fetch("ads/ads.json?nocache=" + Date.now())
       if (started) return;
       started = true;
       var msUntilNextSecond = 1000 - (Date.now() % 1000);
-      setTimeout(checkAndAdvance, msUntilNextSecond);
+      setTimeout(function() {
+        checkAndAdvance();
+        startWatchdog(); // start watchdog after first slide
+      }, msUntilNextSecond);
     }
 
     var loaded = 0;
@@ -240,6 +274,8 @@ fetch("ads/ads.json?nocache=" + Date.now())
   .catch(function(err) {
     console.error(err);
     errorEl.style.display = "block";
+    // Even on error, retry after 30 seconds
+    setTimeout(function() { location.reload(); }, 30000);
   });
 </script>
 </body>
