@@ -29,8 +29,11 @@ var ADS_FOLDER = "ads/";
 var DEFAULT_IMAGE_DURATION = 10;
 var LOAD_TIMEOUT_MS = 8000;
 var PRELOAD_AHEAD = 2;
-var WATCHDOG_INTERVAL = 15000;  // check every 15 seconds
-var WATCHDOG_MAX_STUCK = 30000; // if no advance in 30s, recover
+
+// --- Reconnect / watchdog settings ---
+var WATCHDOG_INTERVAL    = 10000;  // check every 10s
+var WATCHDOG_MAX_STUCK   = 30000;  // if no advance in 30s, force recovery
+var HARD_RELOAD_INTERVAL = 4 * 60 * 60 * 1000; // hard reload every 4 hours
 
 var player = document.getElementById("player");
 var errorEl = document.getElementById("error");
@@ -43,7 +46,6 @@ var cycleLength = 0;
 var offsets = [];
 var imageCache = {};
 
-// Watchdog tracking
 var lastAdvanceTime = Date.now();
 var watchdogTimer = null;
 
@@ -97,30 +99,57 @@ function clearTimers() {
   if (loadTimer)    { clearTimeout(loadTimer);    loadTimer = null; }
 }
 
-// Watchdog: if screen hasn't advanced in WATCHDOG_MAX_STUCK ms, force recovery
+// ─── Watchdog ──────────────────────────────────────────────────────────────
+// FIXED: just check if nothing has advanced in WATCHDOG_MAX_STUCK ms, period.
+function forceRecovery(reason) {
+  console.warn("Recovery triggered:", reason);
+  imageCache = {};
+  clearTimers();
+  if (currentEl) {
+    var oldVid = currentEl.querySelector("video");
+    if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
+    currentEl.remove();
+    currentEl = null;
+  }
+  lastAdvanceTime = Date.now();
+  checkAndAdvance();
+}
+
 function startWatchdog() {
   if (watchdogTimer) clearInterval(watchdogTimer);
   watchdogTimer = setInterval(function() {
-    var now = Date.now();
-    var timeSinceLastAdvance = now - lastAdvanceTime;
-    var expectedMax = (getSlotDuration(adList[getCurrentIndex()]) * 1000) + WATCHDOG_MAX_STUCK;
-    if (timeSinceLastAdvance > expectedMax) {
-      console.warn("Watchdog: screen stuck, forcing recovery");
-      // Clear everything and restart
-      imageCache = {};
-      clearTimers();
-      if (currentEl) {
-        var oldVid = currentEl.querySelector("video");
-        if (oldVid) { oldVid.pause(); oldVid.removeAttribute("src"); oldVid.load(); }
-        currentEl.remove();
-        currentEl = null;
-      }
-      lastAdvanceTime = Date.now();
-      checkAndAdvance();
+    var stuck = Date.now() - lastAdvanceTime;
+    if (stuck > WATCHDOG_MAX_STUCK) {
+      forceRecovery("stuck for " + Math.round(stuck / 1000) + "s");
     }
   }, WATCHDOG_INTERVAL);
 }
 
+// ─── Visibility: recover immediately when screen wakes ─────────────────────
+document.addEventListener("visibilitychange", function() {
+  if (document.visibilityState === "visible" && adList.length) {
+    console.log("Tab became visible — re-syncing");
+    forceRecovery("visibilitychange");
+  }
+});
+
+// ─── Hard reload every 4 hours to clear memory/state drift ─────────────────
+setTimeout(function() {
+  console.log("Scheduled hard reload");
+  location.reload();
+}, HARD_RELOAD_INTERVAL);
+
+// ─── Heartbeat: secondary layer — if advanceTimer fires late or never ───────
+setInterval(function() {
+  if (!adList.length) return;
+  var stuck = Date.now() - lastAdvanceTime;
+  // Secondary check at 45s in case primary watchdog missed it
+  if (stuck > 45000) {
+    forceRecovery("heartbeat secondary check");
+  }
+}, 15000);
+
+// ─── Preload ────────────────────────────────────────────────────────────────
 function preloadUpcoming(currentIndex) {
   for (var i = 1; i <= PRELOAD_AHEAD; i++) {
     var nextIdx = (currentIndex + i) % adList.length;
@@ -146,9 +175,10 @@ function getOrLoadImage(file, onLoad, onError) {
   if (!img.src) img.src = src;
 }
 
+// ─── Show slide ─────────────────────────────────────────────────────────────
 function showSlide(index) {
   clearTimers();
-  lastAdvanceTime = Date.now(); // update watchdog timestamp
+  lastAdvanceTime = Date.now();
 
   var item = adList[index];
   var file = resolveFile(item);
@@ -168,18 +198,24 @@ function showSlide(index) {
     vid.muted = true;
     vid.playsInline = true;
     vid.preload = "auto";
-    vid.addEventListener("canplay", function() {
-      div.classList.add("visible");
-      vid.play().catch(function() {});
-    });
-    vid.addEventListener("ended", checkAndAdvance);
-    vid.addEventListener("error", checkAndAdvance);
-    // Video failsafe
-    loadTimer = setTimeout(function() {
-      console.warn("Video timeout:", file);
+
+    var vidLoadTimer = setTimeout(function() {
+      console.warn("Video load timeout:", file);
       checkAndAdvance();
     }, LOAD_TIMEOUT_MS);
-    vid.addEventListener("canplay", function() { clearTimeout(loadTimer); });
+
+    vid.addEventListener("canplay", function() {
+      clearTimeout(vidLoadTimer);
+      div.classList.add("visible");
+      vid.play().catch(function() { checkAndAdvance(); });
+    });
+    vid.addEventListener("ended", checkAndAdvance);
+    vid.addEventListener("error", function() {
+      clearTimeout(vidLoadTimer);
+      console.warn("Video error:", file);
+      checkAndAdvance();
+    });
+
     div.appendChild(vid);
     player.appendChild(div);
     currentEl = div;
@@ -188,7 +224,7 @@ function showSlide(index) {
 
   } else {
     loadTimer = setTimeout(function() {
-      console.warn("Timeout loading:", file);
+      console.warn("Image load timeout:", file);
       delete imageCache[file];
       checkAndAdvance();
     }, LOAD_TIMEOUT_MS);
@@ -226,7 +262,7 @@ function showSlide(index) {
       function() {
         clearTimeout(loadTimer);
         loadTimer = null;
-        console.warn("Error loading:", file);
+        console.warn("Image error:", file);
         advanceTimer = setTimeout(checkAndAdvance, 500);
       }
     );
@@ -238,45 +274,51 @@ function checkAndAdvance() {
   showSlide(getCurrentIndex());
 }
 
-fetch("ads/ads.json?nocache=" + Date.now())
-  .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
-  .then(function(data) {
-    if (!data.ads || !data.ads.length) throw new Error("empty");
-    adList = data.ads;
-    buildOffsets();
+// ─── Init: fetch ads.json, retry on failure ──────────────────────────────
+function loadAds() {
+  fetch("ads/ads.json?nocache=" + Date.now())
+    .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+    .then(function(data) {
+      if (!data.ads || !data.ads.length) throw new Error("empty");
+      adList = data.ads;
+      buildOffsets();
+      errorEl.style.display = "none";
 
-    var started = false;
-    function tryStart() {
-      if (started) return;
-      started = true;
-      var msUntilNextSecond = 1000 - (Date.now() % 1000);
-      setTimeout(function() {
-        checkAndAdvance();
-        startWatchdog(); // start watchdog after first slide
-      }, msUntilNextSecond);
-    }
+      var started = false;
+      function tryStart() {
+        if (started) return;
+        started = true;
+        var msUntilNextSecond = 1000 - (Date.now() % 1000);
+        setTimeout(function() {
+          checkAndAdvance();
+          startWatchdog();
+        }, msUntilNextSecond);
+      }
 
-    var loaded = 0;
-    adList.forEach(function(ad, i) {
-      var file = resolveFile(ad);
-      if (isVideo(file)) { loaded++; if (loaded === adList.length) tryStart(); return; }
-      var img = new Image();
-      img.onload = img.onerror = function() {
-        loaded++;
-        if (i === getCurrentIndex() || loaded === adList.length) tryStart();
-      };
-      img.src = ADS_FOLDER + encodeURIComponent(file);
-      imageCache[file] = img;
+      var loaded = 0;
+      adList.forEach(function(ad, i) {
+        var file = resolveFile(ad);
+        if (isVideo(file)) { loaded++; if (loaded === adList.length) tryStart(); return; }
+        var img = new Image();
+        img.onload = img.onerror = function() {
+          loaded++;
+          if (i === getCurrentIndex() || loaded === adList.length) tryStart();
+        };
+        img.src = ADS_FOLDER + encodeURIComponent(file);
+        imageCache[file] = img;
+      });
+
+      setTimeout(tryStart, 3000);
+    })
+    .catch(function(err) {
+      console.error("ads.json load failed:", err);
+      errorEl.style.display = "block";
+      // Retry loading ads.json every 15 seconds instead of waiting for hard reload
+      setTimeout(loadAds, 15000);
     });
+}
 
-    setTimeout(tryStart, 3000);
-  })
-  .catch(function(err) {
-    console.error(err);
-    errorEl.style.display = "block";
-    // Even on error, retry after 30 seconds
-    setTimeout(function() { location.reload(); }, 30000);
-  });
+loadAds();
 </script>
 </body>
 </html>
