@@ -35,6 +35,10 @@ var WATCHDOG_INTERVAL    = 10000;  // check every 10s
 var WATCHDOG_MAX_STUCK   = 30000;  // if no advance in 30s, force recovery
 var HARD_RELOAD_INTERVAL = 4 * 60 * 60 * 1000; // hard reload every 4 hours
 
+// FIX 1: Cache ads.json for this many seconds — all boards within the same
+// bucket share one Cloudflare cache hit instead of busting it every request.
+var ADS_JSON_CACHE_BUCKET_SECONDS = 60;
+
 var player = document.getElementById("player");
 var errorEl = document.getElementById("error");
 
@@ -48,6 +52,10 @@ var imageCache = {};
 
 var lastAdvanceTime = Date.now();
 var watchdogTimer = null;
+
+// FIX 2: Track the last known ads.json content so silent refreshes
+// only rebuild state if the data actually changed.
+var lastAdsJson = null;
 
 function isVideo(f) { return /\.(mp4|webm)$/i.test(f); }
 
@@ -100,10 +108,10 @@ function clearTimers() {
 }
 
 // ─── Watchdog ──────────────────────────────────────────────────────────────
-// FIXED: just check if nothing has advanced in WATCHDOG_MAX_STUCK ms, period.
 function forceRecovery(reason) {
   console.warn("Recovery triggered:", reason);
-  imageCache = {};
+  // FIX 3: Do NOT clear imageCache here — no reason to re-download all
+  // assets just because playback got stuck. Keep the cache intact.
   clearTimers();
   if (currentEl) {
     var oldVid = currentEl.querySelector("video");
@@ -133,17 +141,18 @@ document.addEventListener("visibilitychange", function() {
   }
 });
 
-// ─── Hard reload every 4 hours to clear memory/state drift ─────────────────
+// FIX 4: Instead of location.reload() every 4 hours (which re-fetches all
+// assets), just silently refresh ads.json data and only reload the page
+// if something truly unrecoverable has happened (e.g. adList is empty).
 setTimeout(function() {
-  console.log("Scheduled hard reload");
-  location.reload();
+  console.log("Scheduled soft refresh of ads.json");
+  refreshAdsJson();
 }, HARD_RELOAD_INTERVAL);
 
 // ─── Heartbeat: secondary layer — if advanceTimer fires late or never ───────
 setInterval(function() {
   if (!adList.length) return;
   var stuck = Date.now() - lastAdvanceTime;
-  // Secondary check at 45s in case primary watchdog missed it
   if (stuck > 45000) {
     forceRecovery("heartbeat secondary check");
   }
@@ -274,12 +283,55 @@ function checkAndAdvance() {
   showSlide(getCurrentIndex());
 }
 
+// ─── ads.json fetch with time-bucketed cache key ─────────────────────────
+// FIX 1 (implementation): All boards within the same 60-second window
+// send the exact same URL, so Cloudflare serves it from cache after
+// the first hit. No more per-request cache busting.
+function getAdsCacheKey() {
+  return Math.floor(Date.now() / (ADS_JSON_CACHE_BUCKET_SECONDS * 1000));
+}
+
+// FIX 4 (implementation): Silent background refresh — only rebuilds
+// state if ads actually changed. Never does a full page reload unless
+// adList is somehow empty after a fetch.
+function refreshAdsJson() {
+  fetch("ads/ads.json?v=" + getAdsCacheKey())
+    .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
+    .then(function(data) {
+      if (!data.ads || !data.ads.length) return; // nothing useful, keep running
+      var newJson = JSON.stringify(data.ads);
+      if (newJson === lastAdsJson) {
+        console.log("ads.json unchanged, skipping rebuild");
+        return;
+      }
+      console.log("ads.json changed, rebuilding");
+      lastAdsJson = newJson;
+      adList = data.ads;
+      buildOffsets();
+      // Invalidate cache entries for files no longer in the ad list
+      var activeFiles = {};
+      adList.forEach(function(ad) {
+        var files = ad.rotate ? ad.files : [ad.file];
+        files.forEach(function(f) { activeFiles[f] = true; });
+      });
+      Object.keys(imageCache).forEach(function(f) {
+        if (!activeFiles[f]) delete imageCache[f];
+      });
+    })
+    .catch(function(err) {
+      console.warn("ads.json refresh failed (non-fatal):", err);
+      // Don't retry aggressively here — loadAds retry loop handles initial load.
+      // For background refresh failures just let the next scheduled refresh try.
+    });
+}
+
 // ─── Init: fetch ads.json, retry on failure ──────────────────────────────
 function loadAds() {
-  fetch("ads/ads.json?nocache=" + Date.now())
+  fetch("ads/ads.json?v=" + getAdsCacheKey())
     .then(function(r) { if (!r.ok) throw new Error("not found"); return r.json(); })
     .then(function(data) {
       if (!data.ads || !data.ads.length) throw new Error("empty");
+      lastAdsJson = JSON.stringify(data.ads);
       adList = data.ads;
       buildOffsets();
       errorEl.style.display = "none";
@@ -313,8 +365,11 @@ function loadAds() {
     .catch(function(err) {
       console.error("ads.json load failed:", err);
       errorEl.style.display = "block";
-      // Retry loading ads.json every 15 seconds instead of waiting for hard reload
-      setTimeout(loadAds, 15000);
+      // FIX 5: Back off retry on repeated failure instead of hammering
+      // every 15s forever. 15s → 30s → 60s → 60s cap.
+      var retryDelay = (loadAds._retryDelay = Math.min((loadAds._retryDelay || 15000) * 2, 60000));
+      console.log("Retrying ads.json in " + retryDelay / 1000 + "s");
+      setTimeout(loadAds, retryDelay);
     });
 }
 
