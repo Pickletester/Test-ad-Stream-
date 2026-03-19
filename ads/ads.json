@@ -1,6 +1,5 @@
 {
   "ads": [
-    { "file": "ad1.jpg" },
     { "file": "Applebox.jpg" },
     { "file": "Comcast.jpg" },
     { "file": "dj.jpg" },
@@ -8,6 +7,10 @@
     { "file": "Itaily1.jpg" },
     { "file": "J.jpg" },
     { "file": "LevelUp.jpg" },
+      {
+      "rotate": true,
+      "files": ["EBER01.jpg", "EBER02.jpg", "EBER03.jpg", "EBER04.jpg","EBER05.jpg"]
+    },
     { "file": "LORad-15.png", "duration": 15 },
     { "file": "Lorenzi-15.jpg", "duration": 15 },
     { "file": "Mission.jpg" },
