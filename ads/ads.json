@@ -11,7 +11,7 @@
       "rotate": true,
       "files": ["EBER01.jpg", "EBER02.jpg", "EBER03.jpg", "EBER04.jpg","EBER05.jpg"]
     },
-    { "file": "LORad-15.png", },
+    { "file": "LORad-15.png" },
     { "file": "Lorenzi-15.jpg", "duration": 20 },
     { "file": "Mission.jpg" },
     { "file": "Pickleballlifeline.jpg" },
