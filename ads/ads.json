@@ -11,7 +11,7 @@
       "rotate": true,
       "files": ["EBER01.jpg", "EBER02.jpg", "EBER03.jpg", "EBER04.jpg","EBER05.jpg"]
     },
-    { "file": "LORad-15.png", "duration": 20 },
+    { "file": "LDEK.jpg", "duration": 20 },
     { "file": "Lorenzi-15.jpg" },
     { "file": "Mission.jpg" },
     { "file": "Pickleballlifeline.jpg" },
@@ -20,6 +20,7 @@
       "files": ["pisciottano.jpg", "pisciottanoad2.jpg", "pisciottanoad3.jpg", "pisciottanoad4.jpg"]
     },
     { "file": "Podiatry.jpg" },
+    { "file": "GTQA.jpg" },
     { "file": "SantelAd.jpg" },
     { "file": "SunChevy.jpg" },
     { "file": "jetseymikes1.jpg" },
