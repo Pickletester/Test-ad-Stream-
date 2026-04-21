@@ -20,7 +20,7 @@
       "files": ["pisciottano.jpg", "pisciottanoad2.jpg", "pisciottanoad3.jpg", "pisciottanoad4.jpg"]
     },
     { "file": "Podiatry.jpg" },
-    { "file": "GTQA.jpg" },
+    { "file": "GTQA.jpg", "duration": 30 },
     { "file": "SantelAd.jpg" },
     { "file": "SunChevy.jpg" },
     { "file": "jetseymikes1.jpg" },
